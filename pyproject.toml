@@ -1,0 +1,28 @@
+[project]
+name = "tizencertificates"
+version = "0.2.0"
+authors = [
+    { name = "Ryan Meyers", email = "ryanmeyersweb@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115.6",
+    "jinja2>=3.1.5",
+    "python-multipart>=0.0.20",
+    "requests>=2.32.3",
+    "uvicorn>=0.34.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+tv = "tizencertificates.cert_server:main_tv"
+generate = "tizencertificates.cert_server:main"
+
+
+[dependency-groups]
+dev = [
+    "ipython>=9.6.0",
+]

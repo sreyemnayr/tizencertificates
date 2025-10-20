@@ -96,7 +96,11 @@
         {% endfor %}
     </div>
 
-    <p><strong>Note:</strong> Both certificates have been generated with empty passwords for easier integration.</p>
+    {% if cert_password == "" %}
+        <p><strong>Note:</strong> Both certificates have been generated with empty passwords for easier integration.</p>
+    {% else %}
+        <p><strong>Note:</strong> Both certificates have been generated with the password <code>{{ cert_password }}</code>.</p>
+    {% endif %}
 
     <div class="next-steps">
         <h3>Next Steps: Register with Tizen Studio</h3>

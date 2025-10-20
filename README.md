@@ -4,25 +4,23 @@ A FastAPI web application that automates the process of generating Samsung Tizen
 
 ## Installation & Usage
 
+### Requirements
+Install `uv` globally [(instructions)](https://docs.astral.sh/uv/getting-started/installation/)
+
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Run the generator for a TV device
+uv run tv --device-id "000???" --email "your@email.com"
 
-# Run the server (for Tizen devices like watches)
-python cert_server.py --device-id="<DEVICE_ID>" --email="you@example.com"
+# Run the generator for another type of device
+uv run generate --device-id "000???" --email "your@email.com"
 
-# Run the server (for TV devices)
-python cert_server.py --tv --device-id="<DEVICE_ID>" --email="you@example.com"
 ```
 
-Required parameters:
+Required parameters (or defined environment variables):
 
-- `--device-id`: Your device's unique identifier
-- `--email`: Your Samsung account email
+- `--device-id`: Your device's unique identifier (can also read the environment variable `DEVICE_ID`)
+- `--email`: Your Samsung account email (can also read the environment variable `EMAIL`)
 
-Optional parameters:
-
-- `--tv`: Generate certificates for TV devices (default is for other Tizen devices)
 - `--cert-password`: Password to use when generating the certificates (default is blank)
 
 When you run the server, your browser will open to Samsung's login page. You'll need to sign in with your Samsung account to authorize the certificate generation. This provides the necessary OAuth access token for creating the certificates.
@@ -43,6 +41,7 @@ The `certtool.py` module automates the process of obtaining Samsung's certificat
 4. Traverses the nested ZIP files to find:
    - Required CA certificates
    - Java class files containing OAuth configuration
+   - Java class defining certificate api URLs
 
 ### Java Class Analysis
 
@@ -52,7 +51,8 @@ The tool performs basic Java class file parsing to extract constants from Signin
 - Extracts string constants containing:
   - SERVICE_ID for OAuth authentication
   - Login URL endpoints
-  - Other required configuration values
+  - DISTRIBUTER_URL
+  - AUTHOR_URL
 
 This allows the tool to stay up-to-date with Samsung's latest certificate infrastructure without hardcoding values.
 

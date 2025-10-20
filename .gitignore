@@ -2,6 +2,11 @@
 ca/
 certificates/
 
+old_ca/
+old_certificates/
+
+notes.md
+
 # Python
 __pycache__/
 *.py[cod]

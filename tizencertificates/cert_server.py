@@ -1,28 +1,29 @@
+import argparse
+import json
+import logging
+import os
+import secrets
+import signal
+import subprocess
+import sys
+import webbrowser
+from datetime import datetime, timedelta
+from enum import Enum
+from threading import Timer
+from typing import Optional
+from urllib.parse import parse_qs, urlparse
+
+import requests
+import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-import uvicorn
-from typing import Optional
-import subprocess
-import os
-from enum import Enum
-import secrets
-from datetime import datetime, timedelta
-from urllib.parse import urlparse, parse_qs
-import certtool
-import argparse
-import sys
-import logging
-import webbrowser
-from threading import Timer
-import json
-import requests
-import signal
 
+from tizencertificates import certtool
 
 # Get the directory where the script is located
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 # Create necessary directories
 os.makedirs("certificates", exist_ok=True)
@@ -61,6 +62,11 @@ class ServerConfig:
         self.device_id: str = ""
         self.email: str = ""
         self.cert_password: str = ""
+        self.distributor_url: str = ""
+        self.author_url: str = ""
+
+
+config = ServerConfig()
 
 
 def initialize_server(args) -> ServerConfig:
@@ -72,6 +78,8 @@ def initialize_server(args) -> ServerConfig:
 
     config.service_id = variables["SERVICE_ID"]
     config.login_url = variables["loginUrl"]
+    config.distributor_url = variables["DISTRIBUTOR_URL"]
+    config.author_url = variables["AUTHOR_URL"]
     config.cert_type = CertType.TV if args.tv else CertType.OTHER
     config.device_id = args.device_id
     config.email = args.email
@@ -91,8 +99,14 @@ def initialize_server(args) -> ServerConfig:
 
 
 def generate_certificates(
-    cert_type: CertType, device_id: str, email: str, access_token: str, user_id: str, cert_password: str = ""
+    cert_type: CertType,
+    device_id: str,
+    email: str,
+    access_token: str,
+    user_id: str,
+    cert_password: str = "",
 ):
+    global config
     if not user_id:
         raise Exception("No user ID provided")
 
@@ -125,7 +139,7 @@ def generate_certificates(
 
     # Get author certificate from Samsung
     auth_cmd = (
-        f"curl -v -X POST https://dev.tizen.samsung.com:443/apis/v2/authors "
+        f"curl -v -X POST {config.author_url} "
         f'-H "Authorization: Bearer {access_token}" '
         f"-F access_token={access_token} "
         f"-F user_id={user_id} "
@@ -170,11 +184,11 @@ def generate_certificates(
         email_part = ""
 
     # Handle multiple device IDs
-    device_ids = [id.strip() for id in device_id.split(',')]
-    san_extension = 'URI:URN:tizen:packageid='
+    device_ids = [id.strip() for id in device_id.split(",")]
+    san_extension = "URI:URN:tizen:packageid="
     for dev_id in device_ids:
         if dev_id:  # Only add non-empty device IDs
-            san_extension += f',URI:URN:tizen:deviceid={dev_id}'
+            san_extension += f",URI:URN:tizen:deviceid={dev_id}"
 
     dist_commands = [
         "openssl genrsa -out distributor.key.pem 2048",
@@ -185,7 +199,7 @@ def generate_certificates(
 
     # Get distributor certificate from Samsung
     dist_cmd = (
-        f"curl -v -X POST https://dev.tizen.samsung.com:443/apis/v2/distributors "
+        f"curl -v -X POST {config.distributor_url} "
         f'-H "Authorization: Bearer {access_token}" '
         f"-F access_token={access_token} "
         f"-F user_id={user_id} "
@@ -202,9 +216,10 @@ def generate_certificates(
             raise Exception(f"Command failed: {cmd}\nError: {result.stderr}")
 
     # Concatenate distributor certificates
-    with open("distributor.crt", "rb") as dist_cert, open(
-        dist_ca_cert, "rb"
-    ) as ca_cert_file:
+    with (
+        open("distributor.crt", "rb") as dist_cert,
+        open(dist_ca_cert, "rb") as ca_cert_file,
+    ):
         dist_content = dist_cert.read()
         ca_content = ca_cert_file.read()
 
@@ -287,7 +302,7 @@ def setup_routes():
                     config.email,
                     access_token,
                     user_id,
-                    config.cert_password
+                    config.cert_password,
                 )
 
                 # Get list of generated certificate files
@@ -305,7 +320,7 @@ def setup_routes():
                         "request": request,
                         "certificate_files": sorted(cert_files),
                         "certificates_path": cert_dir,
-                        "cert_password": config.cert_password
+                        "cert_password": config.cert_password,
                     },
                 )
 
@@ -339,27 +354,78 @@ def open_browser():
             f"redirect_uri={data['redirect_uri']}"
         )
 
-        logging.info(f"Please visit this URL to authenticate:")
+        logging.info("Please visit this URL to authenticate:")
         logging.info(auth_url)
         webbrowser.open(config.login_url)
     except Exception as e:
         logging.error(f"Failed to construct URL: {e}")
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--tv", action="store_true", help="Generate TV certificates")
-    parser.add_argument("--device-id", required=True, help="Device ID (comma-separated for multiple IDs)")
-    parser.add_argument("--email", required=True, help="Email address")
-    parser.add_argument("--cert-password", required=False, default="", help="Password with which to sign the certificates")
-    args = parser.parse_args()
-
+def start():
     try:
-        config = initialize_server(args)
         setup_routes()  # Setup routes after config is initialized
     except Exception as e:
         logging.error(f"Failed to initialize server: {e}")
         sys.exit(1)
 
-    Timer(1, open_browser).start()
-    uvicorn.run(app, host="0.0.0.0", port=config.port)
+    try:
+        Timer(1, open_browser).start()
+        uvicorn.run(app, host="0.0.0.0", port=config.port)
+    except Exception as e:
+        logging.error(f"Failed to start server: {e}")
+        sys.exit(1)
+
+
+def parse_arguments(tv: bool = False):
+    global config
+    default_email = os.getenv("EMAIL", None)
+    default_device_id = os.getenv("DEVICE_ID", None)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--tv", action="store_true")
+
+    device_id_kwargs = {"help": "Device ID (comma-separated for multiple IDs)"}
+    if default_device_id:
+        device_id_kwargs["default"] = default_device_id
+    else:
+        device_id_kwargs["required"] = True
+    parser.add_argument("--device-id", **device_id_kwargs)
+
+    email_kwargs = {"help": "Email address"}
+    if default_email:
+        email_kwargs["default"] = default_email
+    else:
+        email_kwargs["required"] = True
+    parser.add_argument("--email", **email_kwargs)
+
+    parser.add_argument(
+        "--cert-password",
+        required=False,
+        default="",
+        help="Password with which to sign the certificates",
+    )
+
+    parsed = parser.parse_args()
+
+    if tv:
+        parsed.tv = True
+
+    return parsed
+
+
+def main_tv():
+    global config
+    args = parse_arguments(True)
+    config = initialize_server(args)
+    start()
+
+
+def main():
+    global config
+    args = parse_arguments()
+    config = initialize_server(args)
+    start()
+
+
+if __name__ == "__main__":
+    main()

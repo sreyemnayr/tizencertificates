@@ -1,14 +1,17 @@
-import zipfile
-import requests
-import xml.etree.ElementTree as ET
-from io import BytesIO
-import struct
-from typing import List, Optional, Tuple, Dict
 import json
-import os
 import logging
+import os
+import struct
+import xml.etree.ElementTree as ET
+import zipfile
 from datetime import datetime, timedelta
+from io import BytesIO
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+import requests
+
+debug_mode = False
 
 
 def get_cache_path() -> Path:
@@ -34,10 +37,21 @@ def load_cached_config() -> Optional[Dict[str, str]]:
             logging.info("Cache expired, will fetch fresh configuration")
             return None
 
-        required_keys = ["SERVICE_ID", "loginUrl"]
+        required_keys = ["SERVICE_ID", "loginUrl", "DISTRIBUTOR_URL", "AUTHOR_URL"]
         if all(key in data for key in required_keys):
             logging.info("Using cached configuration")
-            return {"SERVICE_ID": data["SERVICE_ID"], "loginUrl": data["loginUrl"]}
+            return {
+                "SERVICE_ID": data.get("SERVICE_ID", None),
+                "loginUrl": data.get("loginUrl", None),
+                "DISTRIBUTOR_URL": data.get("DISTRIBUTOR_URL", None),
+                "AUTHOR_URL": data.get("AUTHOR_URL", None),
+            }
+        else:
+            missing_keys = [key for key in required_keys if key not in data]
+            logging.warning(
+                f"Cached configuration is missing required keys: {', '.join(missing_keys)}"
+            )
+            return None
     except Exception as e:
         logging.warning(f"Failed to load cache: {e}")
 
@@ -51,6 +65,8 @@ def save_config_cache(config: Dict[str, str]):
         cache_data = {
             "SERVICE_ID": config["SERVICE_ID"],
             "loginUrl": config["loginUrl"],
+            "DISTRIBUTOR_URL": config["DISTRIBUTOR_URL"],
+            "AUTHOR_URL": config["AUTHOR_URL"],
             "timestamp": datetime.now().isoformat(),
         }
         with open(cache_path, "w") as f:
@@ -60,21 +76,30 @@ def save_config_cache(config: Dict[str, str]):
         logging.warning(f"Failed to save cache: {e}")
 
 
-def initialize_server_config() -> Dict[str, str]:
+def initialize_server_config(
+    use_cached_config: bool = True, use_cached_zip: bool = False
+) -> Dict[str, str]:
     """Initialize server configuration, using cache if available"""
     # Try to load from cache first
-    cached_config = load_cached_config()
-    if cached_config:
-        return cached_config
+    if use_cached_config:
+        cached_config = load_cached_config()
+        if cached_config:
+            return cached_config
 
     variables = {
         "SERVICE_ID": None,
         "loginUrl": None,
+        "DISTRIBUTOR_URL": None,
+        "AUTHOR_URL": None,
     }
 
     # Download and process configuration
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+    }
     response = requests.get(
-        "https://download.tizen.org/sdk/tizenstudio/official/extension_info.xml"
+        "https://download.tizen.org/sdk/tizenstudio/official/extension_info.xml",
+        headers=headers,
     )
     if response.status_code == 200:
         logging.info("Downloaded repository XML. Getting certificate extension URL.")
@@ -93,13 +118,18 @@ def initialize_server_config() -> Dict[str, str]:
 
     if not url:
         logging.warning("Could not find url, using default")
-        url = "https://download.tizen.org/sdk/extensions/tizen-certificate-extension_2.0.70.zip"
+        url = "https://download.tizen.org/sdk/extensions/tizen-certificate-extension_2.0.74.zip"
 
-    zip_response = requests.get(url)
-    if zip_response.status_code == 200:
-        with open("certificate_extension.zip", "wb") as f:
-            f.write(zip_response.content)
+    if not use_cached_zip or not os.path.exists(
+        os.path.join(os.path.dirname(__file__), "certificate_extension.zip")
+    ):
+        logging.info("Downloading certificate extension zip file")
+        zip_response = requests.get(url)
+        if zip_response.status_code == 200:
+            with open("certificate_extension.zip", "wb") as f:
+                f.write(zip_response.content)
 
+    logging.info("Extracting certificate extension zip file")
     # Extract certificates and configuration
     with zipfile.ZipFile("certificate_extension.zip", "r") as extension_zip_ref:
         for extension_member in extension_zip_ref.infolist():
@@ -125,7 +155,29 @@ def initialize_server_config() -> Dict[str, str]:
                                         member.filename = fn
                                         jar_ref.extract(member, "ca")
 
-                                    if member.filename.endswith("SigninDialog.class"):
+                                    # Debugging: print all constants from any class with http in their value
+                                    if debug_mode:
+                                        if member.filename.endswith(".class"):
+                                            constants = get_constants(
+                                                BytesIO(jar_ref.read(member.filename))
+                                            )
+                                            for i, constant in enumerate(constants):
+                                                if all(
+                                                    x in constant
+                                                    for x in ["https", "apis/"]
+                                                ):
+                                                    logging.info(
+                                                        f"{constants[i - 1]}: {constants[i]} in "
+                                                        f"{member.filename}"
+                                                    )
+
+                                    if any(
+                                        x in member.filename
+                                        for x in [
+                                            "SigninDialog.class",
+                                            "CertConstant.class",
+                                        ]
+                                    ):
                                         constants = get_constants(
                                             BytesIO(jar_ref.read(member.filename))
                                         )
@@ -136,7 +188,8 @@ def initialize_server_config() -> Dict[str, str]:
                                                     variables[constant] = constants[
                                                         i + 1
                                                     ]
-                                            except:
+                                            except Exception as e:
+                                                logging.info(e)
                                                 pass
 
     # Cache the configuration if it was successfully retrieved
